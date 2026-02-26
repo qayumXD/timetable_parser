@@ -1,8 +1,8 @@
 import re
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Callable, Iterable, Optional
 
-from .cell_parser import parse_cell
+from .cell_parser_v2 import ParsedCell, parse_cell_v2
 from .grid_parser import TIME_SLOTS
 
 
@@ -45,7 +45,11 @@ def _iter_grid(grid: dict) -> Iterable[tuple[str, int, str]]:
             yield day, int(slot), cell_text
 
 
-def normalize(grid: dict, metadata: dict) -> list[ScheduleRecord]:
+def normalize(
+    grid: dict,
+    metadata: dict,
+    cell_parser: Callable[[str], Optional[ParsedCell]] = parse_cell_v2,
+) -> list[ScheduleRecord]:
     header_text = metadata.get("raw_header_text", "") if metadata else ""
     batch = extract_batch(header_text)
     semester = extract_semester(header_text)
@@ -53,7 +57,7 @@ def normalize(grid: dict, metadata: dict) -> list[ScheduleRecord]:
     records: list[ScheduleRecord] = []
 
     for day, slot, cell_text in _iter_grid(grid):
-        parsed = parse_cell(cell_text)
+        parsed = cell_parser(cell_text)
         if not parsed:
             continue
 
