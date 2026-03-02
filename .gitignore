@@ -19,7 +19,7 @@ coverage.xml
 htmlcov/
 
 # Local data outputs
-data/raw/
+#data/raw/
 data/processed/
 data/log/
 timetable.db
