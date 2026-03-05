@@ -19,7 +19,6 @@ coverage.xml
 htmlcov/
 
 # Local data outputs
-
 data/processed/
 data/log/
 timetable.db
@@ -27,6 +26,12 @@ timetable.db
 *.sqlite
 *.sqlite3
 *.pdf
+
+# Generated output and large model files
+output/
+models/
+*.gguf
+*.csv
 
 # OS/editor
 .DS_Store
