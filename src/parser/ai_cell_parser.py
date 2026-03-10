@@ -28,6 +28,24 @@ USER_TEMPLATE = """Extract from this timetable cell text:
 
 JSON:"""
 
+FACULTY_SYSTEM_PROMPT = """You are a data extraction assistant for faculty timetable cells.
+Extract exactly these fields from ONE faculty timetable cell:
+- course_name: full course title only
+- course_credits: text inside credits parentheses such as "2Cr" or "2 Hrs."; null if absent
+- batch_code: one batch code like "BCS-FA23-6B"; null if absent
+- room_code: one room code like "CS-2", "SE-4", "MS-8", "DLD Lab", "CS-13 (Old CS)"; null if absent
+
+Respond ONLY with valid JSON object. No markdown. No explanation.
+Example:
+{"course_name": "Machine Learning Fundamentals", "course_credits": "2Cr", "batch_code": "BCS-FA23-6B", "room_code": "CS-2"}
+"""
+
+FACULTY_USER_TEMPLATE = """Extract fields from this faculty timetable cell text:
+
+{cell_text}
+
+JSON:"""
+
 
 def _get_llm():
     """Lazy-load the LLM on first use."""
@@ -100,3 +118,49 @@ def ai_parse_cell(cell_text: str) -> Optional[dict]:
                 pass
         print(f"[ai_cell_parser] WARNING: Could not parse LLM output: {raw_output!r}")
         return None
+
+
+def ai_parse_faculty_cell(cell_text: str) -> Optional[dict]:
+    """
+    Uses LLM to extract faculty cell fields.
+    Returns dict with keys: course_name, course_credits, batch_code, room_code.
+    Returns None if LLM fails or cell is empty.
+    """
+    if not cell_text or not cell_text.strip():
+        return None
+
+    llm = _get_llm()
+    prompt = FACULTY_USER_TEMPLATE.format(cell_text=cell_text.strip())
+
+    response = llm.create_chat_completion(
+        messages=[
+            {"role": "system", "content": FACULTY_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=180,
+        temperature=0.0,
+        stop=["\n\n"],
+    )
+
+    raw_output = response["choices"][0]["message"]["content"].strip()
+    raw_output = re.sub(r"```json|```", "", raw_output).strip()
+
+    try:
+        result = json.loads(raw_output)
+    except json.JSONDecodeError:
+        match = re.search(r'\{.*?\}', raw_output, re.DOTALL)
+        if not match:
+            print(f"[ai_cell_parser] WARNING: Could not parse LLM output: {raw_output!r}")
+            return None
+        try:
+            result = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            print(f"[ai_cell_parser] WARNING: Could not parse LLM output: {raw_output!r}")
+            return None
+
+    return {
+        "course_name": result.get("course_name"),
+        "course_credits": result.get("course_credits"),
+        "batch_code": result.get("batch_code"),
+        "room_code": result.get("room_code"),
+    }

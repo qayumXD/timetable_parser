@@ -13,6 +13,14 @@ TABLE_SETTINGS = {
 }
 
 
+def get_page_count(pdf_path: str) -> int:
+    """
+    Returns the total number of pages in the PDF.
+    """
+    with pdfplumber.open(pdf_path) as pdf:
+        return len(pdf.pages)
+
+
 def extract_raw_table(pdf_path: str, page_index: int = 0) -> list[list[Optional[str]]]:
     """
     Opens the PDF and extracts the raw 2D table from the specified page.
