@@ -15,7 +15,7 @@ UPLOAD_DIR = BASE_DIR / "data" / "raw" / "web_uploads"
 RUN_PARSER = BASE_DIR / "scripts" / "run_parser.py"
 
 ALLOWED_EXTENSIONS = {"pdf"}
-MAX_PREVIEW_ROWS = 15
+MAX_PREVIEW_ROWS = 100
 
 
 HTML_TEMPLATE = """
@@ -120,6 +120,29 @@ HTML_TEMPLATE = """
       flex-wrap: wrap;
       align-items: center;
     }
+    .radio-group {
+      display: flex;
+      gap: 14px;
+      margin: 10px 0 6px;
+      flex-wrap: wrap;
+    }
+    .radio-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.92rem;
+      color: var(--text);
+    }
+    .radio-item input {
+      width: auto;
+      padding: 0;
+      margin: 0;
+    }
+    input:disabled {
+      background: #f1f5f9;
+      color: #64748b;
+      cursor: not-allowed;
+    }
     a { color: #0f766e; text-decoration: none; }
     a:hover { text-decoration: underline; }
   </style>
@@ -146,8 +169,20 @@ HTML_TEMPLATE = """
           <label>PDF File</label>
           <input type="file" name="pdf_file" accept="application/pdf" required>
 
-          <label>Max Pages (optional)</label>
-          <input type="number" name="max_pages" min="1" placeholder="Leave empty for all pages">
+          <label>Parse Scope</label>
+          <div class="radio-group">
+            <label class="radio-item">
+              <input type="radio" name="page_mode" value="all" checked>
+              All pages
+            </label>
+            <label class="radio-item">
+              <input type="radio" name="page_mode" value="specific">
+              Specific number of pages
+            </label>
+          </div>
+
+          <label>Pages to Parse</label>
+          <input type="number" id="max_pages" name="max_pages" min="1" placeholder="Enter page count" disabled>
 
           <button type="submit">Run Parser</button>
         </form>
@@ -186,6 +221,8 @@ HTML_TEMPLATE = """
       <div class="card">
         <h2>CSV Preview: {{ selected_preview }}</h2>
         {% if preview_header %}
+          <div class="muted">Showing {{ preview_rows|length }} of {{ preview_total_rows }} rows. Use Download for full file.</div>
+          <br />
           <table>
             <thead>
               <tr>
@@ -217,6 +254,27 @@ HTML_TEMPLATE = """
       </div>
     {% endif %}
   </div>
+  <script>
+    (function () {
+      const modeInputs = document.querySelectorAll('input[name="page_mode"]');
+      const maxPagesInput = document.getElementById('max_pages');
+
+      function syncPageInput() {
+        const selected = document.querySelector('input[name="page_mode"]:checked');
+        const specific = selected && selected.value === 'specific';
+        maxPagesInput.disabled = !specific;
+        if (specific) {
+          maxPagesInput.required = true;
+        } else {
+          maxPagesInput.required = false;
+          maxPagesInput.value = '';
+        }
+      }
+
+      modeInputs.forEach((input) => input.addEventListener('change', syncPageInput));
+      syncPageInput();
+    })();
+  </script>
 </body>
 </html>
 """
@@ -247,23 +305,24 @@ def _list_csv_files() -> list[dict]:
     return items
 
 
-def _preview_csv(filename: str) -> tuple[list[str], list[list[str]]]:
+def _preview_csv(filename: str) -> tuple[list[str], list[list[str]], int]:
     path = OUTPUT_DIR / filename
     if not path.exists() or path.suffix.lower() != ".csv":
-        return [], []
+        return [], [], 0
 
     try:
         with path.open("r", encoding="utf-8", newline="") as f:
             reader = csv.reader(f)
             header = next(reader, [])
-            rows = []
+            rows: list[list[str]] = []
+            total_rows = 0
             for idx, row in enumerate(reader):
-                if idx >= MAX_PREVIEW_ROWS:
-                    break
-                rows.append(row)
-            return header, rows
+                total_rows += 1
+                if idx < MAX_PREVIEW_ROWS:
+                    rows.append(row)
+            return header, rows, total_rows
     except OSError:
-        return [], []
+        return [], [], 0
 
 
 def create_app() -> Flask:
@@ -278,8 +337,9 @@ def create_app() -> Flask:
         preview_name = request.args.get("preview", "")
         header: list[str] = []
         rows: list[list[str]] = []
+        total_preview_rows = 0
         if preview_name:
-            header, rows = _preview_csv(preview_name)
+            header, rows, total_preview_rows = _preview_csv(preview_name)
 
         return render_template_string(
             HTML_TEMPLATE,
@@ -287,12 +347,15 @@ def create_app() -> Flask:
             selected_preview=preview_name,
             preview_header=header,
             preview_rows=rows,
+            preview_total_rows=total_preview_rows,
+            preview_limit=MAX_PREVIEW_ROWS,
             run_log=request.args.get("log", ""),
         )
 
     @app.post("/parse")
     def parse_pdf():
         file = request.files.get("pdf_file")
+        page_mode = (request.form.get("page_mode") or "all").strip().lower()
         max_pages_raw = (request.form.get("max_pages") or "").strip()
 
         if file is None or file.filename == "":
@@ -312,7 +375,7 @@ def create_app() -> Flask:
         file.save(saved_path)
 
         cmd = [sys.executable, str(RUN_PARSER), str(saved_path)]
-        if max_pages_raw:
+        if page_mode == "specific":
             if not max_pages_raw.isdigit() or int(max_pages_raw) < 1:
                 flash("Max pages must be a positive integer.")
                 return redirect(url_for("index"))
