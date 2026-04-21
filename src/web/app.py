@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import csv
+import logging
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, flash, redirect, render_template_string, request, send_from_directory, url_for
+from flask import Flask, flash, jsonify, redirect, render_template_string, request, send_from_directory, url_for
 from werkzeug.utils import secure_filename
 
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -16,6 +19,19 @@ RUN_PARSER = BASE_DIR / "scripts" / "run_parser.py"
 
 ALLOWED_EXTENSIONS = {"pdf"}
 MAX_PREVIEW_ROWS = 100
+
+
+RUN_STATE: dict[str, object] = {
+  "running": False,
+  "started_at": None,
+  "finished_at": None,
+  "uploaded_file": "",
+  "cmd": [],
+  "log": "",
+  "error": "",
+  "latest_csv": "",
+}
+RUN_STATE_LOCK = threading.Lock()
 
 
 HTML_TEMPLATE = """
@@ -90,6 +106,22 @@ HTML_TEMPLATE = """
       background: #fff1f1;
       color: var(--warn);
     }
+    .ok {
+      color: #0b6b43;
+      background: #eefaf4;
+      border: 1px solid #b8e5cd;
+      padding: 10px;
+      border-radius: 8px;
+      margin-bottom: 10px;
+    }
+    .warn {
+      color: #9a3412;
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      padding: 10px;
+      border-radius: 8px;
+      margin-bottom: 10px;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -161,6 +193,14 @@ HTML_TEMPLATE = """
         {% endfor %}
       {% endif %}
     {% endwith %}
+
+    {% if run_state.running %}
+      <div class="warn">Parser is running for {{ run_state.uploaded_file }}. This page auto-refreshes every 3 seconds.</div>
+    {% elif run_state.finished_at and not run_state.error %}
+      <div class="ok">Last parser run completed at {{ run_state.finished_at }}.</div>
+    {% elif run_state.error %}
+      <div class="flash">Last parser run failed: {{ run_state.error }}</div>
+    {% endif %}
 
     <div class="grid">
       <div class="card">
@@ -250,7 +290,7 @@ HTML_TEMPLATE = """
     {% if run_log %}
       <div class="card">
         <h2>Last Parser Run Log</h2>
-        <div class="mono">{{ run_log }}</div>
+        <div class="mono" id="run-log">{{ run_log }}</div>
       </div>
     {% endif %}
   </div>
@@ -273,6 +313,26 @@ HTML_TEMPLATE = """
 
       modeInputs.forEach((input) => input.addEventListener('change', syncPageInput));
       syncPageInput();
+
+      const pollEnabled = {{ 'true' if run_state.running else 'false' }};
+      if (pollEnabled) {
+        setInterval(async () => {
+          try {
+            const resp = await fetch('{{ url_for('parse_status') }}', { cache: 'no-store' });
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (!data.running) {
+              const url = new URL(window.location.href);
+              if (data.latest_csv) {
+                url.searchParams.set('preview', data.latest_csv);
+              }
+              window.location.href = url.toString();
+            }
+          } catch (e) {
+            // Ignore transient polling errors and retry.
+          }
+        }, 3000);
+      }
     })();
   </script>
 </body>
@@ -325,12 +385,70 @@ def _preview_csv(filename: str) -> tuple[list[str], list[list[str]], int]:
         return [], [], 0
 
 
+  def _snapshot_state() -> dict[str, object]:
+    with RUN_STATE_LOCK:
+      return dict(RUN_STATE)
+
+
+  def _run_parser_in_background(app: Flask, cmd: list[str], uploaded_file: str) -> None:
+    with app.app_context():
+      app.logger.info("Starting parser run for %s", uploaded_file)
+      before = {p.name for p in OUTPUT_DIR.glob("*.csv")}
+
+      try:
+        result = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True)
+        after = sorted(OUTPUT_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+        log = ((result.stdout or "") + ("\n" + result.stderr if result.stderr else "")).strip()[-12000:]
+        newest_path = next((p for p in after if p.name not in before), after[0] if after else None)
+
+        with RUN_STATE_LOCK:
+          RUN_STATE["running"] = False
+          RUN_STATE["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+          RUN_STATE["log"] = log
+          RUN_STATE["latest_csv"] = newest_path.name if newest_path is not None else ""
+          RUN_STATE["error"] = "" if result.returncode == 0 else f"Parser failed (exit code {result.returncode})"
+
+        if result.returncode == 0:
+          app.logger.info("Parser run completed for %s", uploaded_file)
+        else:
+          app.logger.error("Parser run failed for %s with exit code %s", uploaded_file, result.returncode)
+      except Exception as exc:
+        with RUN_STATE_LOCK:
+          RUN_STATE["running"] = False
+          RUN_STATE["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+          RUN_STATE["error"] = f"Parser crashed: {exc}"
+          RUN_STATE["log"] = str(exc)
+        app.logger.exception("Unexpected error while running parser")
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["SECRET_KEY"] = "timetable-parser-dev"
 
+  if not app.logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+      logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    )
+    app.logger.addHandler(handler)
+  app.logger.setLevel(logging.INFO)
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+  @app.before_request
+  def _log_request_start():
+    request._start_time = time.perf_counter()  # type: ignore[attr-defined]
+    app.logger.info("HTTP %s %s from %s", request.method, request.path, request.remote_addr)
+
+  @app.after_request
+  def _log_request_end(response):
+    start = getattr(request, "_start_time", None)
+    if start is not None:
+      elapsed_ms = (time.perf_counter() - start) * 1000
+      app.logger.info("HTTP %s %s -> %s in %.1fms", request.method, request.path, response.status_code, elapsed_ms)
+    return response
 
     @app.get("/")
     def index():
@@ -349,11 +467,17 @@ def create_app() -> Flask:
             preview_rows=rows,
             preview_total_rows=total_preview_rows,
             preview_limit=MAX_PREVIEW_ROWS,
-            run_log=request.args.get("log", ""),
+            run_log=_snapshot_state().get("log", ""),
+            run_state=_snapshot_state(),
         )
 
     @app.post("/parse")
     def parse_pdf():
+          with RUN_STATE_LOCK:
+            if bool(RUN_STATE["running"]):
+              flash("Parser is already running. Please wait for it to finish.")
+              return redirect(url_for("index"))
+
         file = request.files.get("pdf_file")
         page_mode = (request.form.get("page_mode") or "all").strip().lower()
         max_pages_raw = (request.form.get("max_pages") or "").strip()
@@ -381,22 +505,34 @@ def create_app() -> Flask:
                 return redirect(url_for("index"))
             cmd.append(max_pages_raw)
 
-        before = {p.name for p in OUTPUT_DIR.glob("*.csv")}
-        result = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True)
-        after = sorted(OUTPUT_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+        with RUN_STATE_LOCK:
+          RUN_STATE["running"] = True
+          RUN_STATE["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+          RUN_STATE["finished_at"] = None
+          RUN_STATE["uploaded_file"] = filename
+          RUN_STATE["cmd"] = cmd
+          RUN_STATE["log"] = ""
+          RUN_STATE["error"] = ""
+          RUN_STATE["latest_csv"] = ""
 
-        log = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
-        log = log.strip()[-8000:]
+        worker = threading.Thread(target=_run_parser_in_background, args=(app, cmd, filename), daemon=True)
+        worker.start()
 
-        if result.returncode != 0:
-            flash(f"Parser failed (exit code {result.returncode}).")
-            return redirect(url_for("index", log=log))
+        flash("Parser started. You can stay on this page; it will refresh when complete.")
+        return redirect(url_for("index"))
 
-        newest_path = next((p for p in after if p.name not in before), after[0] if after else None)
-        flash("Parsing completed successfully.")
-        if newest_path is not None:
-            return redirect(url_for("index", preview=newest_path.name, log=log))
-        return redirect(url_for("index", log=log))
+      @app.get("/parse-status")
+      def parse_status():
+        state = _snapshot_state()
+        return jsonify(
+          {
+            "running": bool(state.get("running")),
+            "started_at": state.get("started_at"),
+            "finished_at": state.get("finished_at"),
+            "error": state.get("error", ""),
+            "latest_csv": state.get("latest_csv", ""),
+          }
+        )
 
     @app.get("/download/<path:filename>")
     def download_csv(filename: str):
