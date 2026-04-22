@@ -384,72 +384,72 @@ def _preview_csv(filename: str) -> tuple[list[str], list[list[str]], int]:
     except OSError:
         return [], [], 0
 
-
-  def _snapshot_state() -> dict[str, object]:
+ 
+def _snapshot_state() -> dict[str, object]:
     with RUN_STATE_LOCK:
-      return dict(RUN_STATE)
-
-
-  def _run_parser_in_background(app: Flask, cmd: list[str], uploaded_file: str) -> None:
+        return dict(RUN_STATE)
+ 
+ 
+def _run_parser_in_background(app: Flask, cmd: list[str], uploaded_file: str) -> None:
     with app.app_context():
-      app.logger.info("Starting parser run for %s", uploaded_file)
-      before = {p.name for p in OUTPUT_DIR.glob("*.csv")}
-
-      try:
-        result = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True)
-        after = sorted(OUTPUT_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
-
-        log = ((result.stdout or "") + ("\n" + result.stderr if result.stderr else "")).strip()[-12000:]
-        newest_path = next((p for p in after if p.name not in before), after[0] if after else None)
-
-        with RUN_STATE_LOCK:
-          RUN_STATE["running"] = False
-          RUN_STATE["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-          RUN_STATE["log"] = log
-          RUN_STATE["latest_csv"] = newest_path.name if newest_path is not None else ""
-          RUN_STATE["error"] = "" if result.returncode == 0 else f"Parser failed (exit code {result.returncode})"
-
-        if result.returncode == 0:
-          app.logger.info("Parser run completed for %s", uploaded_file)
-        else:
-          app.logger.error("Parser run failed for %s with exit code %s", uploaded_file, result.returncode)
-      except Exception as exc:
-        with RUN_STATE_LOCK:
-          RUN_STATE["running"] = False
-          RUN_STATE["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-          RUN_STATE["error"] = f"Parser crashed: {exc}"
-          RUN_STATE["log"] = str(exc)
-        app.logger.exception("Unexpected error while running parser")
-
-
+        app.logger.info("Starting parser run for %s", uploaded_file)
+        before = {p.name for p in OUTPUT_DIR.glob("*.csv")}
+ 
+        try:
+            result = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True)
+            after = sorted(OUTPUT_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+ 
+            log = ((result.stdout or "") + ("\n" + result.stderr if result.stderr else "")).strip()[-12000:]
+            newest_path = next((p for p in after if p.name not in before), after[0] if after else None)
+ 
+            with RUN_STATE_LOCK:
+                RUN_STATE["running"] = False
+                RUN_STATE["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                RUN_STATE["log"] = log
+                RUN_STATE["latest_csv"] = newest_path.name if newest_path is not None else ""
+                RUN_STATE["error"] = "" if result.returncode == 0 else f"Parser failed (exit code {result.returncode})"
+ 
+            if result.returncode == 0:
+                app.logger.info("Parser run completed for %s", uploaded_file)
+            else:
+                app.logger.error("Parser run failed for %s with exit code %s", uploaded_file, result.returncode)
+        except Exception as exc:
+            with RUN_STATE_LOCK:
+                RUN_STATE["running"] = False
+                RUN_STATE["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                RUN_STATE["error"] = f"Parser crashed: {exc}"
+                RUN_STATE["log"] = str(exc)
+            app.logger.exception("Unexpected error while running parser")
+ 
+ 
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["SECRET_KEY"] = "timetable-parser-dev"
-
-  if not app.logger.handlers:
-    handler = logging.StreamHandler()
-    handler.setFormatter(
-      logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-    )
-    app.logger.addHandler(handler)
-  app.logger.setLevel(logging.INFO)
-
+ 
+    if not app.logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        )
+        app.logger.addHandler(handler)
+    app.logger.setLevel(logging.INFO)
+ 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-  @app.before_request
-  def _log_request_start():
-    request._start_time = time.perf_counter()  # type: ignore[attr-defined]
-    app.logger.info("HTTP %s %s from %s", request.method, request.path, request.remote_addr)
-
-  @app.after_request
-  def _log_request_end(response):
-    start = getattr(request, "_start_time", None)
-    if start is not None:
-      elapsed_ms = (time.perf_counter() - start) * 1000
-      app.logger.info("HTTP %s %s -> %s in %.1fms", request.method, request.path, response.status_code, elapsed_ms)
-    return response
-
+ 
+    @app.before_request
+    def _log_request_start():
+        request._start_time = time.perf_counter()  # type: ignore[attr-defined]
+        app.logger.info("HTTP %s %s from %s", request.method, request.path, request.remote_addr)
+ 
+    @app.after_request
+    def _log_request_end(response):
+        start = getattr(request, "_start_time", None)
+        if start is not None:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            app.logger.info("HTTP %s %s -> %s in %.1fms", request.method, request.path, response.status_code, elapsed_ms)
+        return response
+ 
     @app.get("/")
     def index():
         preview_name = request.args.get("preview", "")
@@ -458,7 +458,7 @@ def create_app() -> Flask:
         total_preview_rows = 0
         if preview_name:
             header, rows, total_preview_rows = _preview_csv(preview_name)
-
+ 
         return render_template_string(
             HTML_TEMPLATE,
             csv_files=_list_csv_files(),
@@ -470,72 +470,72 @@ def create_app() -> Flask:
             run_log=_snapshot_state().get("log", ""),
             run_state=_snapshot_state(),
         )
-
+ 
     @app.post("/parse")
     def parse_pdf():
-          with RUN_STATE_LOCK:
+        with RUN_STATE_LOCK:
             if bool(RUN_STATE["running"]):
-              flash("Parser is already running. Please wait for it to finish.")
-              return redirect(url_for("index"))
-
+                flash("Parser is already running. Please wait for it to finish.")
+                return redirect(url_for("index"))
+ 
         file = request.files.get("pdf_file")
         page_mode = (request.form.get("page_mode") or "all").strip().lower()
         max_pages_raw = (request.form.get("max_pages") or "").strip()
-
+ 
         if file is None or file.filename == "":
             flash("Please select a PDF file.")
             return redirect(url_for("index"))
-
+ 
         if not _allowed(file.filename):
             flash("Only .pdf files are allowed.")
             return redirect(url_for("index"))
-
+ 
         filename = secure_filename(file.filename)
         if not filename:
             flash("Invalid filename.")
             return redirect(url_for("index"))
-
+ 
         saved_path = UPLOAD_DIR / filename
         file.save(saved_path)
-
+ 
         cmd = [sys.executable, str(RUN_PARSER), str(saved_path)]
         if page_mode == "specific":
             if not max_pages_raw.isdigit() or int(max_pages_raw) < 1:
                 flash("Max pages must be a positive integer.")
                 return redirect(url_for("index"))
             cmd.append(max_pages_raw)
-
+ 
         with RUN_STATE_LOCK:
-          RUN_STATE["running"] = True
-          RUN_STATE["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-          RUN_STATE["finished_at"] = None
-          RUN_STATE["uploaded_file"] = filename
-          RUN_STATE["cmd"] = cmd
-          RUN_STATE["log"] = ""
-          RUN_STATE["error"] = ""
-          RUN_STATE["latest_csv"] = ""
-
+            RUN_STATE["running"] = True
+            RUN_STATE["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            RUN_STATE["finished_at"] = None
+            RUN_STATE["uploaded_file"] = filename
+            RUN_STATE["cmd"] = cmd
+            RUN_STATE["log"] = ""
+            RUN_STATE["error"] = ""
+            RUN_STATE["latest_csv"] = ""
+ 
         worker = threading.Thread(target=_run_parser_in_background, args=(app, cmd, filename), daemon=True)
         worker.start()
-
+ 
         flash("Parser started. You can stay on this page; it will refresh when complete.")
         return redirect(url_for("index"))
-
-      @app.get("/parse-status")
-      def parse_status():
+ 
+    @app.get("/parse-status")
+    def parse_status():
         state = _snapshot_state()
         return jsonify(
-          {
-            "running": bool(state.get("running")),
-            "started_at": state.get("started_at"),
-            "finished_at": state.get("finished_at"),
-            "error": state.get("error", ""),
-            "latest_csv": state.get("latest_csv", ""),
-          }
+            {
+                "running": bool(state.get("running")),
+                "started_at": state.get("started_at"),
+                "finished_at": state.get("finished_at"),
+                "error": state.get("error", ""),
+                "latest_csv": state.get("latest_csv", ""),
+            }
         )
-
+ 
     @app.get("/download/<path:filename>")
     def download_csv(filename: str):
         return send_from_directory(OUTPUT_DIR, filename, as_attachment=True)
-
+ 
     return app
