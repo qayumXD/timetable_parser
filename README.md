@@ -1,91 +1,71 @@
-# Timetable Parser
+# Financial-Grade PDF Data Extraction Pipeline
 
-Parse COMSATS Vehari centralized timetable PDFs (student and faculty) into CSV and SQLite.
+A robust Python-based pipeline for extracting structured data from complex PDF layouts (University Timetables) with LLM-based normalization and automated validation.
 
-## Features
+## 🚀 Key Features
 
-- Parses student and faculty timetable PDFs.
-- Supports multi-page PDFs.
-- Writes parsed records to:
-	- SQLite database (`timetable.db`)
-	- Timestamped CSV files in `output/`
-- Optional AI fallback for uncertain cells.
-- Minimal web UI for upload, parse, preview, and download.
+- **Advanced PDF Parsing**: Handles multi-page, grid-based PDF layouts using `pdfplumber`.
+- **Hybrid Extraction Engine**:
+    - **Heuristic/Regex Layer**: High-speed extraction for deterministic patterns.
+    - **LLM-based Fallback (Ollama/Gemma)**: Intelligent extraction for uncertain or non-standard cells, mapping raw text to structured JSON.
+- **Data Normalization**: Automated mapping of extracted fields (Faculty, Courses, Slots) to an internal classification system.
+- **Structured Storage**: Exports to SQLite (relational) and timestamped CSV (interchange format).
+- **Validation Dashboard**: Web UI for document intake, real-time parsing logs, and data preview.
 
-## Setup
+## 🛠️ Tech Stack
+
+- **Core**: Python 3.x, FastAPI/Flask
+- **PDF Processing**: `pdfplumber`
+- **LLM Integration**: Ollama (Gemma-2B/Qwen2.5) via Local API
+- **Database**: SQLite (Supabase-ready schema)
+- **Testing**: `pytest` for pipeline validation
+
+## 📋 Architecture
+
+The pipeline is designed for high accuracy in data extraction from varied vendors/formats:
+1.  **Ingestion**: Document intake via CLI or Web UI.
+2.  **Detection**: Grid and timetable detection to identify relevant data regions.
+3.  **Extraction**: Parallel processing of cells using hybrid heuristic + LLM logic.
+4.  **Normalization**: Normalizing faculty names, course codes, and room locations.
+5.  **Output**: Validation-ready JSON/CSV/SQL records.
+
+## ⚙️ Setup
 
 ```bash
 pip install -r requirements.txt
+# Ensure Ollama is running for LLM fallback
 ```
 
-## CLI Usage
+## 🖥️ Usage
 
-### Parse a PDF (all pages)
+### CLI Pipeline
 
 ```bash
-python scripts/run_parser.py data/raw/CTsp26.pdf
+# Process a full report
+python scripts/run_parser.py data/raw/input.pdf
+
+# Debug/Inspect PDF structure
+python scripts/inspect_pdf.py data/raw/input.pdf
 ```
 
-### Parse only first N pages
-
-Useful for quick testing:
-
-```bash
-python scripts/run_parser.py data/raw/CTsp26.pdf 3
-```
-
-### Parse a faculty timetable PDF
-
-```bash
-python scripts/run_parser.py data/raw/FacultyCS.pdf
-```
-
-### Inspect PDF extraction (debug)
-
-```bash
-python scripts/inspect_pdf.py data/raw/CTsp26.pdf
-```
-
-### Run tests
-
-```bash
-python -m pytest tests/ -v
-```
-
-## Web UI Usage
-
-### Start the UI
+### Web Validation Dashboard
 
 ```bash
 python scripts/run_web.py
 ```
 
-Open in browser:
+- **URL**: `http://localhost:8000`
+- **Features**: PDF upload, page-scoping, live logs, and interactive CSV preview.
 
-- `http://localhost:8000`
+## 📸 Screenshots
 
-## Screenshots
+![Data Ingestion UI](SS/UI01.png)
+![Extraction Results & Preview](SS/UI02.png)
 
-![Web UI Upload](SS/UI01.png)
-![Web UI Results](SS/UI02.png)
+## 📂 Project Structure
 
-### In the UI
-
-- Upload a `.pdf` file.
-- Optionally set `max_pages`.
-- Click **Run Parser**.
-- View parser run logs.
-- Preview generated CSV rows.
-- Download CSV files from the output table.
-
-## Outputs
-
-- Database: `timetable.db`
-- CSV files: `output/*.csv`
-- Web uploads: `data/raw/web_uploads/`
-
-## Key Scripts
-
-- `scripts/run_parser.py` -> Main parser CLI
-- `scripts/run_web.py` -> Start web interface
-- `scripts/inspect_pdf.py` -> Debug PDF extraction
+- `src/parser/`: Core extraction logic and LLM adapters.
+- `src/db/`: Database schema and seeder (SQLAlchemy/SQL).
+- `src/web/`: Flask-based validation interface.
+- `scripts/`: Entry points for CLI and Web services.
+- `tests/`: Comprehensive test suite for extraction accuracy.
