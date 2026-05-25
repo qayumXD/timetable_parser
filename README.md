@@ -64,6 +64,11 @@ Open in browser:
 
 - `http://localhost:8000`
 
+## Screenshots
+
+![Web UI Upload](SS/UI01.png)
+![Web UI Results](SS/UI02.png)
+
 ### In the UI
 
 - Upload a `.pdf` file.

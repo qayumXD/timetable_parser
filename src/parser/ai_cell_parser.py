@@ -1,17 +1,20 @@
 """
-LLM-based fallback cell parser using llama-cpp-python + Qwen2.5-1.5B-Instruct GGUF.
+LLM-based fallback cell parser using a locally running Ollama model.
 Only called when the regex parser returns an uncertain result.
 """
 
 import json
+import os
 import re
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
-# Lazy import — only load when needed
-_llm = None
-
-MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+BASE_DIR = Path(__file__).parent.parent.parent
+MODEL_PATH = BASE_DIR / "models" / "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
 
 SYSTEM_PROMPT = """You are a data extraction assistant for a university timetable system.
 You will be given raw text from a single timetable cell. Extract exactly three fields:
@@ -45,33 +48,44 @@ FACULTY_USER_TEMPLATE = """Extract fields from this faculty timetable cell text:
 {cell_text}
 
 JSON:"""
+def _call_ollama(system_prompt: str, user_prompt: str, max_tokens: int) -> str:
+    """Send a non-streaming chat request to a local Ollama server."""
+    payload = json.dumps(
+        {
+            "model": OLLAMA_MODEL,
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": 0,
+                "num_predict": max_tokens,
+            },
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+    ).encode("utf-8")
 
+    request = urllib.request.Request(
+        f"{OLLAMA_HOST}/api/chat",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise ConnectionError(
+            f"Could not reach Ollama at {OLLAMA_HOST}. "
+            f"Make sure Ollama is running and model {OLLAMA_MODEL!r} is installed."
+        ) from exc
 
-def _get_llm():
-    """Lazy-load the LLM on first use."""
-    global _llm
-    if _llm is None:
-        try:
-            from llama_cpp import Llama
-        except ImportError:
-            raise ImportError(
-                "llama-cpp-python is not installed. Run: pip install llama-cpp-python"
-            )
-        if not MODEL_PATH.exists():
-            raise FileNotFoundError(
-                f"Model not found at {MODEL_PATH}. "
-                "Run: huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct-GGUF "
-                "qwen2.5-1.5b-instruct-q4_k_m.gguf --local-dir models/"
-            )
-        print(f"[ai_cell_parser] Loading LLM from {MODEL_PATH} ...")
-        _llm = Llama(
-            model_path=str(MODEL_PATH),
-            n_ctx=512,
-            n_threads=4,
-            verbose=False,
-        )
-        print("[ai_cell_parser] LLM loaded.")
-    return _llm
+    message = body.get("message", {})
+    content = message.get("content")
+    if not content:
+        raise ValueError(f"Ollama returned no message content: {body}")
+    return content.strip()
 
 
 def ai_parse_cell(cell_text: str) -> Optional[dict]:
@@ -83,21 +97,8 @@ def ai_parse_cell(cell_text: str) -> Optional[dict]:
     if not cell_text or not cell_text.strip():
         return None
 
-    llm = _get_llm()
-
     prompt = USER_TEMPLATE.format(cell_text=cell_text.strip())
-
-    response = llm.create_chat_completion(
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": prompt},
-        ],
-        max_tokens=150,
-        temperature=0.0,
-        stop=["\n\n"],
-    )
-
-    raw_output = response["choices"][0]["message"]["content"].strip()
+    raw_output = _call_ollama(SYSTEM_PROMPT, prompt, max_tokens=150)
 
     # Strip any accidental markdown fences
     raw_output = re.sub(r"```json|```", "", raw_output).strip()
@@ -129,20 +130,8 @@ def ai_parse_faculty_cell(cell_text: str) -> Optional[dict]:
     if not cell_text or not cell_text.strip():
         return None
 
-    llm = _get_llm()
     prompt = FACULTY_USER_TEMPLATE.format(cell_text=cell_text.strip())
-
-    response = llm.create_chat_completion(
-        messages=[
-            {"role": "system", "content": FACULTY_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=180,
-        temperature=0.0,
-        stop=["\n\n"],
-    )
-
-    raw_output = response["choices"][0]["message"]["content"].strip()
+    raw_output = _call_ollama(FACULTY_SYSTEM_PROMPT, prompt, max_tokens=180)
     raw_output = re.sub(r"```json|```", "", raw_output).strip()
 
     try:

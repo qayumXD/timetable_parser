@@ -19,6 +19,9 @@ RUN_PARSER = BASE_DIR / "scripts" / "run_parser.py"
 
 ALLOWED_EXTENSIONS = {"pdf"}
 MAX_PREVIEW_ROWS = 100
+DAY_ORDER = {"Monday": 1, "Tuesday": 2, "Wednesday": 3, "Thursday": 4, "Friday": 5, "Saturday": 6, "Sunday": 7}
+FACULTY_COLUMNS = {"teacher_name", "semester", "day", "slot", "time_start", "time_end", "course_name", "batch_code", "room_code"}
+STUDENT_COLUMNS = {"batch", "semester", "day", "slot", "time_start", "time_end", "subject", "room_code", "instructor_name"}
 
 
 RUN_STATE: dict[str, object] = {
@@ -43,270 +46,701 @@ HTML_TEMPLATE = """
   <title>Timetable Parser</title>
   <style>
     :root {
-      --bg: #f6f7f9;
+      --bg: #f4f6f8;
       --panel: #ffffff;
-      --text: #1e293b;
-      --muted: #64748b;
+      --panel-soft: #f8fafc;
+      --text: #111827;
+      --muted: #5f6b7a;
+      --subtle: #8a94a3;
       --accent: #0f766e;
-      --border: #dbe2ea;
-      --warn: #b91c1c;
+      --accent-ink: #0b4f49;
+      --border: #d8dee8;
+      --border-strong: #c2cad6;
+      --danger: #b42318;
+      --warning: #9a3412;
+      --success: #117a47;
+      --shadow: 0 1px 2px rgba(17, 24, 39, 0.05);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: radial-gradient(circle at top right, #e2f3f1, var(--bg) 40%);
+      background: var(--bg);
       color: var(--text);
-      font-family: "Segoe UI", Tahoma, sans-serif;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
     }
-    .wrap {
-      max-width: 1080px;
-      margin: 24px auto;
-      padding: 0 16px 32px;
+    a {
+      color: var(--accent-ink);
+      text-decoration: none;
+      font-weight: 600;
     }
-    .card {
+    a:hover { text-decoration: underline; }
+    .shell {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 20px 40px;
+    }
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 18px;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 {
+      font-size: 1.55rem;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+    h2 {
+      font-size: 1rem;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+    h3 {
+      font-size: 0.92rem;
+      line-height: 1.25;
+    }
+    .eyebrow {
+      color: var(--subtle);
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .lede {
+      color: var(--muted);
+      margin-top: 6px;
+      max-width: 620px;
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 32px;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 0.84rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--subtle);
+    }
+    .status-pill.is-running .status-dot { background: var(--warning); }
+    .status-pill.is-complete .status-dot { background: var(--success); }
+    .status-pill.is-error .status-dot { background: var(--danger); }
+    .panel {
       background: var(--panel);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+    .panel-pad { padding: 16px; }
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+      gap: 16px;
+      align-items: start;
+      margin-bottom: 16px;
+    }
+    .section-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
       margin-bottom: 14px;
     }
-    h1, h2 { margin: 0 0 12px; }
-    h1 { font-size: 1.35rem; }
-    h2 { font-size: 1rem; }
-    .muted { color: var(--muted); }
-    .grid {
+    .section-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .muted {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    .field {
       display: grid;
-      grid-template-columns: 1.1fr 1fr;
-      gap: 14px;
+      gap: 7px;
+      margin-top: 14px;
     }
-    @media (max-width: 900px) {
-      .grid { grid-template-columns: 1fr; }
+    .field-label {
+      display: block;
+      font-size: 0.86rem;
+      font-weight: 700;
     }
-    label { display: block; margin: 8px 0 6px; font-weight: 600; }
-    input, button {
+    .native-file {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      clip-path: inset(50%);
+    }
+    .file-drop {
+      display: grid;
+      gap: 3px;
       width: 100%;
+      min-height: 72px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      cursor: pointer;
+    }
+    .file-drop:hover { border-color: var(--border-strong); }
+    .file-title {
+      font-weight: 800;
+      color: var(--accent-ink);
+    }
+    .file-name {
+      color: var(--muted);
+      font-size: 0.9rem;
+      overflow-wrap: anywhere;
+    }
+    .scope-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .scope-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
       padding: 10px;
       border: 1px solid var(--border);
       border-radius: 8px;
-      font-size: 0.95rem;
+      background: var(--panel);
+      color: var(--text);
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
     }
-    button {
-      margin-top: 10px;
+    .scope-option:has(input:checked) {
+      border-color: rgba(15, 118, 110, 0.5);
+      background: #eef8f6;
+      color: var(--accent-ink);
+    }
+    .scope-option input {
+      width: auto;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+    .number-input {
+      width: 100%;
+      min-height: 42px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+    }
+    .number-input:disabled {
+      background: #eef2f6;
+      color: var(--subtle);
+      cursor: not-allowed;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      font: inherit;
+      font-size: 0.92rem;
+      font-weight: 800;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .button:hover { text-decoration: none; }
+    .button-primary {
+      width: 100%;
+      margin-top: 16px;
       border: 0;
       background: var(--accent);
       color: #fff;
-      cursor: pointer;
-      font-weight: 700;
     }
-    .flash {
-      padding: 10px;
+    .button-secondary {
+      border-color: var(--border-strong);
+      background: var(--panel);
+      color: var(--text);
+    }
+    .button-link {
+      min-height: 34px;
+      padding: 6px 8px;
+      color: var(--accent-ink);
+      background: transparent;
+      border-color: transparent;
+      font-weight: 800;
+    }
+    .button:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+    .alert {
+      padding: 11px 12px;
       border-radius: 8px;
-      margin-bottom: 10px;
-      border: 1px solid #f2d0d0;
-      background: #fff1f1;
-      color: var(--warn);
+      margin-bottom: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 0.92rem;
     }
-    .ok {
-      color: #0b6b43;
-      background: #eefaf4;
-      border: 1px solid #b8e5cd;
-      padding: 10px;
-      border-radius: 8px;
-      margin-bottom: 10px;
+    .alert-error {
+      border-color: #f2b8b5;
+      background: #fff5f5;
+      color: var(--danger);
     }
-    .warn {
-      color: #9a3412;
+    .alert-success {
+      border-color: #b8e2ca;
+      background: #f0faf4;
+      color: var(--success);
+    }
+    .alert-warning {
+      border-color: #fed7aa;
       background: #fff7ed;
-      border: 1px solid #fed7aa;
-      padding: 10px;
+      color: var(--warning);
+    }
+    .table-scroll {
+      width: 100%;
+      overflow-x: auto;
+      border: 1px solid var(--border);
       border-radius: 8px;
-      margin-bottom: 10px;
     }
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.86rem;
-      overflow: auto;
+      font-size: 0.88rem;
     }
     th, td {
-      border: 1px solid var(--border);
-      padding: 6px;
+      border-bottom: 1px solid var(--border);
+      padding: 8px 10px;
       text-align: left;
       vertical-align: top;
     }
-    th { background: #f0f5f9; }
+    th {
+      background: #eef2f6;
+      color: #233044;
+      font-size: 0.78rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .preview-table { min-width: 820px; }
+    .raw-table { min-width: 980px; }
+    .output-list {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .output-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .output-item:last-child { border-bottom: 0; }
+    .output-item.is-selected { background: #f0faf8; }
+    .output-main {
+      min-width: 0;
+    }
+    .output-name {
+      display: block;
+      color: var(--text);
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .output-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+    .output-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .nowrap { white-space: nowrap; }
+    .type-chip,
+    .tag,
+    .slot-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      color: var(--muted);
+      font-size: 0.76rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .tag {
+      margin-left: 8px;
+      color: var(--accent-ink);
+      border-color: rgba(15, 118, 110, 0.25);
+      background: #eef8f6;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 14px 0;
+    }
+    .metric {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-soft);
+    }
+    .metric span {
+      display: block;
+      color: var(--subtle);
+      font-size: 0.74rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .metric strong {
+      display: block;
+      margin-top: 4px;
+      color: var(--text);
+      font-size: 0.94rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .course-name {
+      font-weight: 800;
+      color: var(--text);
+    }
+    .empty-state {
+      padding: 22px 16px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .preview-panel {
+      margin-bottom: 16px;
+    }
+    .raw-preview,
+    .log-panel {
+      margin-top: 14px;
+    }
+    details summary {
+      cursor: pointer;
+      color: var(--accent-ink);
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
     .mono {
       white-space: pre-wrap;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 0.82rem;
-      background: #0f172a;
+      line-height: 1.5;
+      background: #111827;
       color: #e2e8f0;
-      padding: 10px;
+      padding: 12px;
       border-radius: 8px;
       max-height: 320px;
       overflow: auto;
     }
-    .link-row {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: center;
+    .mobile-only { display: none; }
+    @media (max-width: 900px) {
+      .shell { padding: 20px 16px 32px; }
+      .page-header { display: grid; }
+      .dashboard-grid { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
-    .radio-group {
-      display: flex;
-      gap: 14px;
-      margin: 10px 0 6px;
-      flex-wrap: wrap;
+    @media (max-width: 560px) {
+      .shell { padding: 18px 14px 28px; }
+      .scope-group { grid-template-columns: 1fr; }
+      .section-head { display: grid; }
+      .metrics { grid-template-columns: 1fr; }
+      h1 { font-size: 1.35rem; }
+      .panel-pad { padding: 14px; }
+      .desktop-only { display: none; }
+      .mobile-only { display: inline; }
+      .output-item {
+        align-items: start;
+        display: grid;
+      }
+      .output-name {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      .output-actions {
+        justify-content: start;
+      }
     }
-    .radio-item {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 0.92rem;
-      color: var(--text);
-    }
-    .radio-item input {
-      width: auto;
-      padding: 0;
-      margin: 0;
-    }
-    input:disabled {
-      background: #f1f5f9;
-      color: #64748b;
-      cursor: not-allowed;
-    }
-    a { color: #0f766e; text-decoration: none; }
-    a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="card">
-      <h1>Timetable Parser Web UI</h1>
-      <div class="muted">Upload a PDF, run parser, and inspect/download generated CSV.</div>
-    </div>
+  <main class="shell">
+    {% set status_class = 'is-running' if run_state.running else ('is-error' if run_state.error else ('is-complete' if run_state.finished_at else 'is-idle')) %}
+    {% set status_text = 'Running' if run_state.running else ('Failed' if run_state.error else ('Completed' if run_state.finished_at else 'Idle')) %}
+
+    <header class="page-header">
+      <div>
+        <div class="eyebrow">Timetable operations</div>
+        <h1>Timetable Parser</h1>
+        <p class="lede">COMSATS timetable PDF to structured CSV.</p>
+      </div>
+      <div class="status-pill {{ status_class }}">
+        <span class="status-dot" aria-hidden="true"></span>
+        {{ status_text }}
+      </div>
+    </header>
 
     {% with messages = get_flashed_messages() %}
       {% if messages %}
         {% for m in messages %}
-          <div class="flash">{{ m }}</div>
+          <div class="alert alert-error">{{ m }}</div>
         {% endfor %}
       {% endif %}
     {% endwith %}
 
     {% if run_state.running %}
-      <div class="warn">Parser is running for {{ run_state.uploaded_file }}. This page auto-refreshes every 3 seconds.</div>
+      <div class="alert alert-warning">Parser is running for {{ run_state.uploaded_file }}.</div>
     {% elif run_state.finished_at and not run_state.error %}
-      <div class="ok">Last parser run completed at {{ run_state.finished_at }}.</div>
+      <div class="alert alert-success">Last parser run completed at {{ run_state.finished_at }}.</div>
     {% elif run_state.error %}
-      <div class="flash">Last parser run failed: {{ run_state.error }}</div>
+      <div class="alert alert-error">Last parser run failed: {{ run_state.error }}</div>
     {% endif %}
 
-    <div class="grid">
-      <div class="card">
-        <h2>Parse New PDF</h2>
+    <div class="dashboard-grid">
+      <section class="panel panel-pad">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Input</div>
+            <h2>Parse New PDF</h2>
+          </div>
+        </div>
         <form method="post" action="{{ url_for('parse_pdf') }}" enctype="multipart/form-data">
-          <label>PDF File</label>
-          <input type="file" name="pdf_file" accept="application/pdf" required>
-
-          <label>Parse Scope</label>
-          <div class="radio-group">
-            <label class="radio-item">
-              <input type="radio" name="page_mode" value="all" checked>
-              All pages
+          <div class="field">
+            <label class="field-label" for="pdf_file">PDF File</label>
+            <label class="file-drop" for="pdf_file">
+              <span class="file-title">Choose PDF</span>
+              <span class="file-name" id="file-name">No file selected</span>
             </label>
-            <label class="radio-item">
-              <input type="radio" name="page_mode" value="specific">
-              Specific number of pages
-            </label>
+            <input class="native-file" id="pdf_file" type="file" name="pdf_file" accept="application/pdf" required>
           </div>
 
-          <label>Pages to Parse</label>
-          <input type="number" id="max_pages" name="max_pages" min="1" placeholder="Enter page count" disabled>
+          <div class="field">
+            <span class="field-label">Parse Scope</span>
+            <div class="scope-group">
+              <label class="scope-option">
+              <input type="radio" name="page_mode" value="all" checked>
+                <span>All pages</span>
+              </label>
+              <label class="scope-option">
+              <input type="radio" name="page_mode" value="specific">
+                <span>Specific pages</span>
+              </label>
+            </div>
+          </div>
 
-          <button type="submit">Run Parser</button>
+          <div class="field" id="page-count-field">
+            <label class="field-label" for="max_pages">Pages to Parse</label>
+            <input class="number-input" type="number" id="max_pages" name="max_pages" min="1" placeholder="Enter page count" disabled>
+          </div>
+
+          <button class="button button-primary" type="submit" {% if run_state.running %}disabled{% endif %}>
+            {% if run_state.running %}Parser Running{% else %}Run Parser{% endif %}
+          </button>
         </form>
-      </div>
+      </section>
 
-      <div class="card">
-        <h2>Recent CSV Outputs</h2>
+      <section class="panel panel-pad">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Output</div>
+            <h2>Recent CSV Outputs</h2>
+          </div>
+        </div>
         {% if csv_files %}
-          <table>
-            <thead>
-              <tr><th>File</th><th>Rows</th><th>Updated</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              {% for item in csv_files %}
-              <tr>
-                <td>{{ item.name }}</td>
-                <td>{{ item.rows }}</td>
-                <td>{{ item.updated }}</td>
-                <td>
-                  <div class="link-row">
-                    <a href="{{ url_for('download_csv', filename=item.name) }}">Download</a>
-                    <a href="{{ url_for('index', preview=item.name) }}">Preview</a>
+          <div class="output-list">
+            {% for item in csv_files %}
+              <div class="output-item {% if item.name == selected_preview %}is-selected{% endif %}">
+                <div class="output-main">
+                  <span class="output-name" title="{{ item.name }}">{{ item.name }}</span>
+                  <div class="output-meta">
+                    <span class="type-chip">{{ item.kind }}</span>
+                    <span>{{ item.rows }} rows</span>
+                    <span>{{ item.updated }}</span>
                   </div>
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+                </div>
+                <div class="output-actions">
+                  <a class="button button-link" href="{{ url_for('index', preview=item.name) }}">Preview</a>
+                  <a class="button button-link" href="{{ url_for('download_csv', filename=item.name) }}">Download</a>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
         {% else %}
-          <div class="muted">No CSV files found in output/.</div>
+          <div class="empty-state">No CSV files found in output/.</div>
         {% endif %}
-      </div>
+      </section>
     </div>
 
     {% if selected_preview %}
-      <div class="card">
-        <h2>CSV Preview: {{ selected_preview }}</h2>
+      <section class="panel panel-pad preview-panel">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Selected output</div>
+            <h2>{{ selected_preview }}</h2>
+            {% if preview_header %}
+              <p class="muted">Showing {{ preview_rows|length }} of {{ preview_total_rows }} rows.</p>
+            {% endif %}
+          </div>
+          <div class="section-actions">
+            <a class="button button-secondary" href="{{ url_for('download_csv', filename=selected_preview) }}">Download CSV</a>
+          </div>
+        </div>
         {% if preview_header %}
-          <div class="muted">Showing {{ preview_rows|length }} of {{ preview_total_rows }} rows. Use Download for full file.</div>
-          <br />
-          <table>
-            <thead>
-              <tr>
-                {% for h in preview_header %}
-                  <th>{{ h }}</th>
-                {% endfor %}
-              </tr>
-            </thead>
-            <tbody>
-              {% for row in preview_rows %}
-                <tr>
-                  {% for c in row %}
-                    <td>{{ c }}</td>
+          <div class="metrics">
+            <div class="metric">
+              <span>Type</span>
+              <strong>{{ preview_model.kind }}</strong>
+            </div>
+            <div class="metric">
+              <span>{{ preview_model.primary_label }}</span>
+              <strong title="{{ preview_model.primary_value }}">{{ preview_model.primary_value }}</strong>
+            </div>
+            <div class="metric">
+              <span>Semester</span>
+              <strong>{{ preview_model.semester }}</strong>
+            </div>
+            <div class="metric">
+              <span>Records</span>
+              <strong>{{ preview_total_rows }}</strong>
+            </div>
+          </div>
+
+          {% if preview_model.schedule_rows %}
+            <div class="table-scroll">
+              <table class="preview-table">
+                <thead>
+                  <tr>
+                    <th>Day</th>
+                    <th>Slot</th>
+                    <th>Time</th>
+                    <th>Course</th>
+                    <th>{{ preview_model.secondary_label }}</th>
+                    <th>Room</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for record in preview_model.schedule_rows %}
+                    {% set course_name = record[preview_model.course_key] %}
+                    <tr>
+                      <td class="nowrap">{{ record.day }}</td>
+                      <td><span class="slot-badge">Slot {{ record.slot }}</span></td>
+                      <td class="nowrap">{{ record.time_start }}-{{ record.time_end }}</td>
+                      <td>
+                        <span class="course-name">{{ course_name }}</span>
+                        {% if 'lab' in course_name|lower %}
+                          <span class="tag">Lab</span>
+                        {% endif %}
+                      </td>
+                      <td>{{ record[preview_model.secondary_key] }}</td>
+                      <td class="nowrap">{{ record.room_code }}</td>
+                    </tr>
                   {% endfor %}
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">This CSV does not match the known timetable columns.</div>
+          {% endif %}
+
+          <details class="raw-preview">
+            <summary>Raw CSV rows</summary>
+            <div class="table-scroll">
+              <table class="raw-table">
+                <thead>
+                  <tr>
+                    {% for h in preview_header %}
+                      <th>{{ h }}</th>
+                    {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in preview_rows %}
+                    <tr>
+                      {% for c in row %}
+                        <td>{{ c }}</td>
+                      {% endfor %}
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </details>
         {% else %}
-          <div class="muted">Could not load preview.</div>
+          <div class="empty-state">Could not load preview.</div>
         {% endif %}
-      </div>
+      </section>
+    {% else %}
+      <section class="panel panel-pad preview-panel">
+        <div class="empty-state">No output selected.</div>
+      </section>
     {% endif %}
 
     {% if run_log %}
-      <div class="card">
-        <h2>Last Parser Run Log</h2>
-        <div class="mono" id="run-log">{{ run_log }}</div>
-      </div>
+      <section class="panel panel-pad">
+        <details class="log-panel" {% if run_state.error %}open{% endif %}>
+          <summary>Last Parser Run Log</summary>
+          <div class="mono" id="run-log">{{ run_log }}</div>
+        </details>
+      </section>
     {% endif %}
-  </div>
+  </main>
   <script>
     (function () {
+      const fileInput = document.getElementById('pdf_file');
+      const fileName = document.getElementById('file-name');
       const modeInputs = document.querySelectorAll('input[name="page_mode"]');
       const maxPagesInput = document.getElementById('max_pages');
+
+      if (fileInput && fileName) {
+        fileInput.addEventListener('change', () => {
+          fileName.textContent = fileInput.files && fileInput.files.length
+            ? fileInput.files[0].name
+            : 'No file selected';
+        });
+      }
 
       function syncPageInput() {
         const selected = document.querySelector('input[name="page_mode"]:checked');
         const specific = selected && selected.value === 'specific';
         maxPagesInput.disabled = !specific;
-        if (specific) {
-          maxPagesInput.required = true;
-        } else {
-          maxPagesInput.required = false;
+        maxPagesInput.required = specific;
+        if (!specific) {
           maxPagesInput.value = '';
         }
       }
@@ -344,20 +778,49 @@ def _allowed(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def _resolve_output_csv(filename: str) -> Path | None:
+    try:
+        output_root = OUTPUT_DIR.resolve()
+        path = (OUTPUT_DIR / filename).resolve()
+        path.relative_to(output_root)
+    except (OSError, ValueError):
+        return None
+
+    if not path.exists() or path.suffix.lower() != ".csv":
+        return None
+    return path
+
+
+def _detect_csv_kind(header: list[str]) -> str:
+    columns = set(header)
+    if FACULTY_COLUMNS.issubset(columns):
+        return "Faculty"
+    if STUDENT_COLUMNS.issubset(columns):
+        return "Student"
+    return "CSV"
+
+
+def _read_csv_summary(path: Path) -> tuple[list[str], int]:
+    try:
+        with path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, [])
+            rows = sum(1 for _ in reader)
+            return header, rows
+    except OSError:
+        return [], 0
+
+
 def _list_csv_files() -> list[dict]:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     files = sorted(OUTPUT_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
     items: list[dict] = []
     for path in files[:20]:
-        rows = 0
-        try:
-            with path.open("r", encoding="utf-8", newline="") as f:
-                rows = max(sum(1 for _ in f) - 1, 0)
-        except OSError:
-            rows = 0
+        header, rows = _read_csv_summary(path)
         items.append(
             {
                 "name": path.name,
+                "kind": _detect_csv_kind(header),
                 "rows": rows,
                 "updated": datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
             }
@@ -366,8 +829,8 @@ def _list_csv_files() -> list[dict]:
 
 
 def _preview_csv(filename: str) -> tuple[list[str], list[list[str]], int]:
-    path = OUTPUT_DIR / filename
-    if not path.exists() or path.suffix.lower() != ".csv":
+    path = _resolve_output_csv(filename)
+    if path is None:
         return [], [], 0
 
     try:
@@ -384,7 +847,79 @@ def _preview_csv(filename: str) -> tuple[list[str], list[list[str]], int]:
     except OSError:
         return [], [], 0
 
- 
+
+def _row_dicts(header: list[str], rows: list[list[str]]) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for row in rows:
+        records.append({name: row[idx] if idx < len(row) else "" for idx, name in enumerate(header)})
+    return records
+
+
+def _first_value(records: list[dict[str, str]], key: str, fallback: str = "Unknown") -> str:
+    for record in records:
+        value = (record.get(key) or "").strip()
+        if value:
+            return value
+    return fallback
+
+
+def _slot_number(record: dict[str, str]) -> int:
+    try:
+        return int(record.get("slot", ""))
+    except ValueError:
+        return 99
+
+
+def _schedule_sort_key(record: dict[str, str]) -> tuple[int, int, str]:
+    return (
+        DAY_ORDER.get(record.get("day", ""), 99),
+        _slot_number(record),
+        record.get("time_start", ""),
+    )
+
+
+def _preview_model(filename: str, header: list[str], rows: list[list[str]], total_rows: int) -> dict[str, object]:
+    kind = _detect_csv_kind(header)
+    records = _row_dicts(header, rows)
+
+    model: dict[str, object] = {
+        "kind": kind,
+        "primary_label": "File",
+        "primary_value": filename,
+        "secondary_label": "Related",
+        "secondary_key": "",
+        "course_key": "",
+        "semester": _first_value(records, "semester"),
+        "row_count": total_rows,
+        "schedule_rows": [],
+    }
+
+    if kind == "Faculty":
+        model.update(
+            {
+                "primary_label": "Teacher",
+                "primary_value": _first_value(records, "teacher_name"),
+                "secondary_label": "Batch",
+                "secondary_key": "batch_code",
+                "course_key": "course_name",
+                "schedule_rows": sorted(records, key=_schedule_sort_key),
+            }
+        )
+    elif kind == "Student":
+        model.update(
+            {
+                "primary_label": "Batch",
+                "primary_value": _first_value(records, "batch"),
+                "secondary_label": "Instructor",
+                "secondary_key": "instructor_name",
+                "course_key": "subject",
+                "schedule_rows": sorted(records, key=_schedule_sort_key),
+            }
+        )
+
+    return model
+
+
 def _snapshot_state() -> dict[str, object]:
     with RUN_STATE_LOCK:
         return dict(RUN_STATE)
@@ -456,8 +991,10 @@ def create_app() -> Flask:
         header: list[str] = []
         rows: list[list[str]] = []
         total_preview_rows = 0
+        preview_data: dict[str, object] = _preview_model("", header, rows, total_preview_rows)
         if preview_name:
             header, rows, total_preview_rows = _preview_csv(preview_name)
+            preview_data = _preview_model(preview_name, header, rows, total_preview_rows)
  
         return render_template_string(
             HTML_TEMPLATE,
@@ -466,6 +1003,7 @@ def create_app() -> Flask:
             preview_header=header,
             preview_rows=rows,
             preview_total_rows=total_preview_rows,
+            preview_model=preview_data,
             preview_limit=MAX_PREVIEW_ROWS,
             run_log=_snapshot_state().get("log", ""),
             run_state=_snapshot_state(),
